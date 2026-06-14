@@ -1,0 +1,9 @@
+packages:
+  - 'client'
+  - 'server'
+
+allowBuilds:
+  better-sqlite3: true
+  canvas: true
+  core-js: true
+  esbuild: true

@@ -1,0 +1,8 @@
+{
+  "name": "vet-mis",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "firebase-admin": "^14.0.0"
+  }
+}
