@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, Download, X, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { getInvoices, updateInvoice } from '../services/db';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 
 // Formato Lempiras hondureños
 const fmtLPS = (n) => `L ${Number(n).toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// Formato visual ID
+const fmtId = (id) => `FAC-${String(id).slice(-5).toUpperCase()}`;
 
 export default function Facturas({ userRole }) {
   const [invoices, setInvoices] = useState([]);
@@ -25,45 +31,102 @@ export default function Facturas({ userRole }) {
   const [downloadingId, setDownloadingId] = useState(null);
 
   const loadData = async () => {
-    const invs = await fetch('/api/invoices').then(r => r.json());
-    setInvoices(invs);
-    setLoading(false);
+    try {
+      const invs = await getInvoices();
+      setInvoices(invs);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { loadData(); }, []);
 
   const handleRegisterPayment = async () => {
     setSaving(true);
-    await fetch(`/api/invoices/${selectedInvoice.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    try {
+      await updateInvoice(selectedInvoice.id, {
         estado: 'Pagada',
         metodo_pago: payForm.metodo_pago
-      })
-    });
-    await loadData();
-    setShowPayModal(false);
-    setSelectedInvoice(null);
-    setSaving(false);
+      });
+      await loadData();
+      setShowPayModal(false);
+      setSelectedInvoice(null);
+    } catch (e) {
+      console.error(e);
+      alert('Error al registrar pago');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const downloadPdf = async (id) => {
-    setDownloadingId(id);
+  const downloadPdf = async (inv) => {
+    setDownloadingId(inv.id);
     try {
-      const res = await fetch(`/api/invoices/${id}/pdf`);
-      if (!res.ok) throw new Error('Error al descargar');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `factura_${String(id).padStart(5, '0')}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      
+      doc.setFontSize(20);
+      doc.setFont("helvetica", "bold");
+      doc.text("VET-MIS CLINIC", 14, 22);
+      
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text("Clínica Veterinaria Integral", 14, 28);
+      
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text(`FACTURA RECIBO: ${fmtId(inv.id)}`, pageWidth - 14, 22, { align: 'right' });
+      
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Fecha: ${inv.fecha}`, pageWidth - 14, 28, { align: 'right' });
+      
+      doc.line(14, 32, pageWidth - 14, 32);
+      
+      doc.setFont("helvetica", "bold");
+      doc.text("Datos del Cliente:", 14, 40);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Nombre: ${inv.dueno || '—'}`, 18, 46);
+      
+      doc.setFont("helvetica", "bold");
+      doc.text("Datos del Paciente:", pageWidth / 2, 40);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Paciente: ${inv.paciente || '—'}`, (pageWidth / 2) + 4, 46);
+      
+      doc.autoTable({
+        startY: 55,
+        headStyles: { fillColor: [16, 185, 129] },
+        head: [['Descripción', 'Precio Unit.', 'Total']],
+        body: [
+          [inv.servicio || 'Servicios Veterinarios', fmtLPS(inv.total), fmtLPS(inv.total)]
+        ],
+      });
+      
+      const finalY = doc.lastAutoTable.finalY + 10;
+      doc.setFont("helvetica", "bold");
+      doc.text(`Método de Pago: ${inv.metodo_pago || '—'}`, 14, finalY);
+      doc.text(`Estado: ${inv.estado.toUpperCase()}`, 14, finalY + 6);
+      
+      doc.text("Subtotal:", pageWidth - 50, finalY);
+      doc.setFont("helvetica", "normal");
+      doc.text(fmtLPS(inv.subtotal), pageWidth - 14, finalY, { align: 'right' });
+      
+      doc.setFont("helvetica", "bold");
+      doc.text("ISV (15%):", pageWidth - 50, finalY + 6);
+      doc.setFont("helvetica", "normal");
+      doc.text(fmtLPS(inv.impuesto), pageWidth - 14, finalY + 6, { align: 'right' });
+      
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text("TOTAL:", pageWidth - 50, finalY + 14);
+      doc.text(fmtLPS(inv.total), pageWidth - 14, finalY + 14, { align: 'right' });
+      
+      doc.save(`factura_${fmtId(inv.id)}.pdf`);
     } catch (e) {
-      alert('No se pudo descargar el PDF de la factura');
+      console.error(e);
+      alert('No se pudo generar el PDF');
     } finally {
       setDownloadingId(null);
     }
@@ -166,10 +229,10 @@ export default function Facturas({ userRole }) {
                   {inv.cita_id ? (
                     <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Calendar size={12} style={{ color: 'var(--text-muted)' }}/>
-                      FAC-{String(inv.id).padStart(5, '0')}
+                      {fmtId(inv.id)}
                     </span>
                   ) : (
-                    `FAC-${String(inv.id).padStart(5, '0')}`
+                    fmtId(inv.id)
                   )}
                 </td>
                 <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{inv.fecha}</td>
@@ -191,7 +254,7 @@ export default function Facturas({ userRole }) {
                 <td>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <button 
-                      onClick={() => downloadPdf(inv.id)} 
+                      onClick={() => downloadPdf(inv)} 
                       disabled={downloadingId === inv.id}
                       className="btn-ghost" 
                       style={{ padding: '4px 8px', fontSize: '0.75rem', height: '32px' }}
@@ -258,7 +321,7 @@ export default function Facturas({ userRole }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.82rem' }}>
                 <div>
                   <p style={{ color: 'var(--text-muted)', marginBottom: '2px' }}>Folio</p>
-                  <p style={{ fontWeight: 700, fontFamily: 'monospace' }}>FAC-{String(selectedInvoice?.id).padStart(5, '0')}</p>
+                  <p style={{ fontWeight: 700, fontFamily: 'monospace' }}>{fmtId(selectedInvoice?.id || '')}</p>
                 </div>
                 <div>
                   <p style={{ color: 'var(--text-muted)', marginBottom: '2px' }}>Paciente</p>

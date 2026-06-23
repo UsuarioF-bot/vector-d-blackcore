@@ -4,6 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend,
   PieChart, Pie, Cell, LineChart, Line
 } from 'recharts';
+import { getInvoices, getAppointments, getInventory, getPatients } from '../services/db';
 
 const COLORS = ['#0ea5e9', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#14b8a6'];
 
@@ -17,6 +18,8 @@ const PRESETS = [
 const getLocalStr = (d = new Date()) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+
+const fmtLPS = (n) => `L ${Number(n).toLocaleString('es-HN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function Reportes() {
   const todayStr = getLocalStr();
@@ -49,26 +52,123 @@ export default function Reportes() {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch(`/api/analytics?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
-      const ct = res.headers.get('content-type') || '';
-      if (!res.ok) {
-        const err = ct.includes('json') ? await res.json() : {};
-        throw new Error(err.error || err.detail || `Error ${res.status} al cargar analítica`);
-      }
-      if (!ct.includes('json')) {
-        throw new Error('La API no respondió. ¿Está corriendo el servidor (ventana VET-MIS API)?');
-      }
-      const payload = await res.json();
-      setData({
-        kpis: payload.kpis || {},
-        ingresosYConsultas: payload.ingresosYConsultas || [],
-        consultasPorTipo: payload.consultasPorTipo || [],
-        productosConsumidos: payload.productosConsumidos || [],
-        alertasCorrelacion: payload.alertasCorrelacion || [],
-        especies: payload.especies || [],
-        recurrentes: payload.recurrentes || [],
-        metodosPago: payload.metodosPago || [],
+      const [invoices, appointments, inventory, patients] = await Promise.all([
+        getInvoices(), getAppointments(), getInventory(), getPatients()
+      ]);
+
+      const inRange = (fecha) => fecha >= start && fecha <= end;
+      const validInvoices = invoices.filter(i => inRange(i.fecha));
+      const validAppointments = appointments.filter(a => inRange(a.fecha));
+
+      let totalIngresos = 0;
+      let totalPendiente = 0;
+      const metodosMap = {};
+
+      validInvoices.forEach(inv => {
+        if (inv.estado === 'Pagada') {
+          totalIngresos += Number(inv.total) || 0;
+          const mp = inv.metodo_pago || 'Desconocido';
+          metodosMap[mp] = (metodosMap[mp] || 0) + (Number(inv.total) || 0);
+        } else if (inv.estado === 'Pendiente') {
+          totalPendiente += Number(inv.total) || 0;
+        }
       });
+
+      const metodosPago = Object.entries(metodosMap).map(([name, value]) => ({ name, value }));
+
+      let completadas = 0;
+      let pendientes = 0;
+      const consultasMap = {};
+
+      validAppointments.forEach(app => {
+        if (app.estado === 'Completado') completadas++;
+        else if (app.estado === 'Pendiente' || app.estado === 'En Proceso') pendientes++;
+        
+        const s = app.servicio || 'General';
+        consultasMap[s] = (consultasMap[s] || 0) + 1;
+      });
+
+      const consultasPorTipo = Object.entries(consultasMap).map(([name, value]) => ({ name, value }));
+
+      const startD = new Date(start);
+      const endD = new Date(end);
+      const diffDays = (endD - startD) / (1000 * 60 * 60 * 24);
+      
+      const timeGroup = {};
+      validInvoices.forEach(inv => {
+        if (inv.estado === 'Pagada') {
+          let key = inv.fecha;
+          if (diffDays > 31) key = key.substring(0, 7);
+          
+          if (!timeGroup[key]) timeGroup[key] = { Ingresos: 0, Facturas: 0 };
+          timeGroup[key].Ingresos += Number(inv.total) || 0;
+          timeGroup[key].Facturas += 1;
+        }
+      });
+
+      const ingresosYConsultas = Object.keys(timeGroup).sort().map(key => ({
+        name: key,
+        Ingresos: timeGroup[key].Ingresos,
+        Facturas: timeGroup[key].Facturas
+      }));
+
+      const pacientesMap = {};
+      patients.forEach(p => { pacientesMap[p.id] = p; });
+
+      const especiesMap = {};
+      const patientVisits = {};
+
+      validAppointments.forEach(app => {
+        const pid = app.paciente_id;
+        const p = pacientesMap[pid];
+        if (p) {
+          const esp = p.especie || 'Desconocido';
+          especiesMap[esp] = (especiesMap[esp] || 0) + 1;
+        }
+        if (app.estado === 'Completado') {
+           patientVisits[pid] = (patientVisits[pid] || 0) + 1;
+        }
+      });
+
+      const especies = Object.entries(especiesMap).map(([name, value]) => ({ name, value }));
+      
+      const recurrentes = Object.entries(patientVisits)
+        .filter(([id, count]) => count > 1)
+        .map(([id, count]) => ({
+          data: { nombre: pacientesMap[id]?.nombre || 'Desconocido' },
+          count,
+          tendencia: Math.round(diffDays / count) || 1
+        }))
+        .sort((a,b) => b.count - a.count)
+        .slice(0, 5);
+
+      const productosConsumidos = inventory.map(item => ({
+        name: item.nombre,
+        consumo: 0,
+        stockReal: Number(item.stock),
+        minimoDB: Number(item.minimo),
+        minimoDinamico: Number(item.minimo)
+      })).filter(i => i.stockReal <= i.minimoDB);
+
+      const alertasCorrelacion = productosConsumidos.filter(p => p.stockReal <= 0);
+
+      setData({
+        kpis: { 
+          totalIngresos, 
+          totalConsultas: validAppointments.length, 
+          completadas, 
+          pendientes, 
+          totalPendiente 
+        },
+        ingresosYConsultas,
+        consultasPorTipo,
+        productosConsumidos,
+        alertasCorrelacion,
+        especies,
+        recurrentes,
+        metodosPago,
+      });
+
     } catch (e) {
       console.error(e);
       setLoadError(e.message || 'No se pudo cargar la analítica');
@@ -99,31 +199,52 @@ export default function Reportes() {
     setDownloading(type);
     setResult(null);
     try {
-      const url = `/api/reports/${type}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-      const res = await fetch(url);
-      const ct = res.headers.get('content-type') || '';
-      if (!res.ok) {
-        const err = ct.includes('json') ? await res.json().catch(() => ({})) : {};
-        throw new Error(err.error || err.detail || `Error ${res.status} al generar el reporte`);
+      if (type === 'pdf') {
+        const { default: jsPDF } = await import('jspdf');
+        await import('jspdf-autotable');
+        const doc = new jsPDF();
+        
+        doc.setFontSize(18);
+        doc.text("Reporte VET-MIS", 14, 22);
+        doc.setFontSize(11);
+        doc.text(`Periodo: ${start} a ${end}`, 14, 30);
+        
+        doc.autoTable({
+          startY: 40,
+          head: [['Métrica', 'Valor']],
+          body: [
+            ['Total Ingresos (Cobrados)', fmtLPS(data.kpis.totalIngresos)],
+            ['Cuentas por Cobrar (Pendiente)', fmtLPS(data.kpis.totalPendiente)],
+            ['Citas Completadas', data.kpis.completadas],
+            ['Citas Pendientes', data.kpis.pendientes],
+            ['Total de Citas Programadas', data.kpis.totalConsultas],
+          ]
+        });
+
+        doc.save(`reporte_${start}_${end}.pdf`);
+        setResult({ ok: true, msg: 'PDF descargado correctamente.' });
+      } else {
+        const { utils, writeFile } = await import('xlsx');
+        
+        const wb = utils.book_new();
+        const wsKpi = utils.json_to_sheet([
+          { Metrica: 'Total Ingresos', Valor: data.kpis.totalIngresos },
+          { Metrica: 'Cuentas por Cobrar', Valor: data.kpis.totalPendiente },
+          { Metrica: 'Citas Completadas', Valor: data.kpis.completadas },
+          { Metrica: 'Citas Pendientes', Valor: data.kpis.pendientes },
+          { Metrica: 'Total Citas Programadas', Valor: data.kpis.totalConsultas },
+        ]);
+        utils.book_append_sheet(wb, wsKpi, "KPIs");
+
+        const wsIngresos = utils.json_to_sheet(data.ingresosYConsultas);
+        utils.book_append_sheet(wb, wsIngresos, "Ingresos");
+
+        writeFile(wb, `reporte_${start}_${end}.xlsx`);
+        setResult({ ok: true, msg: 'Excel descargado correctamente.' });
       }
-      if (ct.includes('json') || ct.includes('text/html')) {
-        throw new Error('La API no devolvió un archivo. Verifica que la ventana "VET-MIS API" esté abierta.');
-      }
-      const blob = await res.blob();
-      if (blob.size < 100) {
-        throw new Error('El archivo generado está vacío');
-      }
-      const ext = type === 'pdf' ? 'pdf' : 'xlsx';
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `vetmis_${start}_${end}.${ext}`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(link.href);
-      setResult({ ok: true, msg: type === 'pdf' ? 'PDF listo para descarga.' : 'Excel listo para descarga.' });
     } catch (e) {
-      setResult({ ok: false, msg: e.message || 'No se pudo generar el archivo' });
+      console.error(e);
+      setResult({ ok: false, msg: 'No se pudo generar el archivo' });
     } finally {
       setDownloading(null);
     }

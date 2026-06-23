@@ -152,6 +152,32 @@ export default function Citas({ userRole }) {
   const cambiarEstado = async (id, estado) => {
     try {
       await updateAppointment(id, { estado });
+      
+      if (estado === 'Completado') {
+        const cita = citas.find(c => c.id === id);
+        if (cita) {
+          const ISV_RATE = 0.15;
+          const total = parseFloat(cita.monto || 0);
+          const subtotal = total / (1 + ISV_RATE);
+          const impuesto = total - subtotal;
+          
+          const { addInvoice } = await import('../services/db');
+          await addInvoice({
+            cita_id: id,
+            paciente_id: cita.paciente_id,
+            paciente: cita.paciente,
+            dueno: cita.dueno,
+            servicio: cita.servicio || 'Servicio Veterinario',
+            subtotal,
+            impuesto,
+            total,
+            estado: 'Pendiente',
+            metodo_pago: '',
+            fecha: getLocalStr()
+          });
+        }
+      }
+      
       await load();
     } catch (e) {
       console.error(e);

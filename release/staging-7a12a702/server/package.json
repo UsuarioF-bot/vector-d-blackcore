@@ -1,0 +1,23 @@
+{
+  "name": "vet-mis-server",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "dev": "node --watch index.js",
+    "start": "node index.js",
+    "seed": "node seed_massive.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "chart.js": "^4.5.1",
+    "chartjs-node-canvas": "^5.0.0",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "jspdf": "^2.5.1",
+    "jspdf-autotable": "^3.8.2",
+    "morgan": "^1.10.0",
+    "pdfkit": "^0.18.0"
+  }
+}

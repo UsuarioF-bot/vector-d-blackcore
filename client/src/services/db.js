@@ -125,8 +125,8 @@ export const addInvoice = async (invoiceData) => {
   return { id: docRef.id, ...invoiceData };
 };
 
-export const updateInvoiceStatus = async (id, estado) => {
-  await updateDoc(doc(db, INVOICES_COLLECTION, id), { estado });
+export const updateInvoice = async (id, updates) => {
+  await updateDoc(doc(db, INVOICES_COLLECTION, id), updates);
 };
 
 // --- USUARIOS (por correo) ---
