@@ -262,9 +262,7 @@ export default function Reportes() {
         </div>
       )}
 
-      {loading && (
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>Cargando analítica…</p>
-      )}
+      <div style={{ height: '24px', marginBottom: '1rem' }} />
 
       {/* Controles Top */}
       <div className="glass-card" style={{ padding: '1.5rem', marginBottom: '2rem', display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
